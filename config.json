@@ -1,0 +1,21 @@
+{
+  "meta": {
+    "name": "tastytrade-bot"
+  },
+  "api-info": {
+    "cert": "https://api.cert.tastyworks.com",
+    "prod": "https://api.tastyworks.com"
+  },
+  "login": {
+    "cert": "placeholder",
+    "prod": "placeholder"
+  },
+  "password": {
+    "cert": "placeholder",
+    "prod": "placeholder"
+  },
+  "account-numbers": {
+    "cert": "placeholder",
+    "prod": "placeholder"
+  }
+}
