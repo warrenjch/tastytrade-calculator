@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from datetime import datetime, timedelta, date
 from tastytrade.instruments import *
 from tastytrade.market_data import *
 from itertools import chain
@@ -40,8 +41,8 @@ class OptionMethods:
                 "symbol": opt.symbol,
                 "strike_price": float(opt.strike_price),
                 "option_type": opt.option_type,
-                "bid": float(getattr(res_map.get(opt.symbol, None), "bid", np.nan)),
-                "ask": float(getattr(res_map.get(opt.symbol, None), "ask", np.nan)),
+                "bid": float(bid) if (bid := getattr(res_map.get(opt.symbol, None), "bid", None)) is not None else np.nan,
+                "ask": float(ask) if (ask := getattr(res_map.get(opt.symbol, None), "ask", None)) is not None else np.nan
             }
             for opt in chain
         ]
@@ -119,7 +120,7 @@ class OptionMethods:
             print('IVs already present in chain')
             return chain
 
-        T = TimeMethods.calculate_tte(dte, time_method=time_method)
+        T = TimeMethods.calculate_yte(dte, time_method=time_method)
         rfr /= 100
         div_yield /= 100
 
@@ -182,6 +183,37 @@ class OptionMethods:
         return iv * 100
 
     @staticmethod
+    def find_greeks(spot, chain, dte, rfr, div_yield=0, time_method='calendar'):
+        '''
+        you need to have run find_ivs first to have civ and piv
+        spot can be obtained from spot in the database or from get_market_data
+        '''
+        spot = float(spot)
+        rfr, div_yield = rfr / 100, div_yield / 100
+        T = TimeMethods.calculate_yte(dte, time_method)
+        K = chain['strike'].astype(float)
+        iv = np.where(K >= OptionMethods.find_atmf_strike(chain), chain['civ'], chain['piv']).astype(float)
+        iv = np.maximum(iv, 1e-4)
+        iv /= 100
+        d1 = (np.log(spot / K) + (rfr - div_yield + 0.5 * iv ** 2) * T) / (iv * np.sqrt(T))
+        d2 = d1 - iv * np.sqrt(T)
+        exp_qt = np.exp(-div_yield * T)
+        exp_rt = np.exp(-rfr * T)
+        cdf, pdf = norm.cdf, norm.pdf
+
+        chain['cdelta'] = exp_qt * cdf(d1)
+        chain['pdelta'] = exp_qt * (cdf(d1) - 1)
+        chain['gamma'] = exp_qt * pdf(d1) / (spot * iv * np.sqrt(T))
+        chain['vega'] = spot * exp_qt * pdf(d1) * np.sqrt(T) / 100
+        chain['ctheta'] = (-(spot * iv * exp_qt * pdf(d1)) / (2 * np.sqrt(T))
+                           - rfr * K * exp_rt * cdf(d2)
+                           + div_yield * spot * exp_qt * cdf(d1)) / 365
+        chain['ptheta'] = (-(spot * iv * exp_qt * pdf(d1)) / (2 * np.sqrt(T))
+                           + rfr * K * exp_rt * cdf(-d2)
+                           - div_yield * spot * exp_qt * cdf(-d1)) / 365
+        return chain
+
+    @staticmethod
     def plot_iv(session, symbol: str, exp: pd.Timestamp, bounds=None, moneyness=False, time_method='calendar', gaussian_sigma=2, fig=None):
         options = get_option_chain(session, symbol)
         chain = options[exp.date()]
@@ -218,6 +250,49 @@ class OptionMethods:
         return fig
 
     @staticmethod
+    def atm_vol_surface(session, ticker: str, rfr, div_yield = 0, bounds: tuple = (1, 1e7), time_method: str = 'calendar', fig=None):
+        '''
+        bounds will include dte of earliest exp and dte of furthest exp
+        '''
+        rfr /= 100
+        lb, rb = bounds
+        options = get_option_chain(session, ticker)
+        today = datetime.today().date()
+        expiries = [e for e in list(options.keys()) if ((TimeMethods.calendar_dte(today, e)>=lb) and (TimeMethods.calendar_dte(today, e)<=rb))]
+        if not expiries:
+            raise ValueError(f'No valid expiries for {ticker} within dte bounds of {bounds}')
+        records = []
+        for exp in expiries:
+            chain = options[exp]
+            df = OptionMethods.convertchain(session, chain)
+            date = pd.to_datetime(exp).date()
+            if time_method == 'calendar':
+                dte = TimeMethods.calendar_dte(today, date)
+            else:
+                raise ValueError(f"Unsupported time_method: {time_method}")
+            T = TimeMethods.calculate_yte(dte, time_method=time_method)
+            K = OptionMethods.find_atmf_strike(df)
+            atm = df.loc[df['strike'] == K].iloc[0]
+            atm['cmid'], atm['pmid'] = (atm['cbid'] + atm['cask']) / 2, (atm['pbid'] + atm['pask']) / 2
+            F = K + np.exp((rfr - div_yield) * T) * (atm['cmid'] - atm['pmid'])
+            civ = OptionMethods.bs_iv(atm['cmid'], F, K, T, rfr, is_call=True)
+            piv = OptionMethods.bs_iv(atm['pmid'], F, K, T, rfr, is_call=False)
+            records.append({'dte': dte, 'iv': (civ+piv)/2})
+
+        iv_df = pd.DataFrame(records)
+        if fig is None:
+            fig = plt.figure(figsize=(12, 8))
+            plt.xlabel('DTE')
+            plt.title(f'{today} ATM term structure')
+            plt.ylabel('ATM IV')
+        else:
+            plt.figure(fig.number)
+        plt.plot(iv_df['dte'], iv_df['iv'], marker='o', label=ticker)
+        plt.legend()
+        return fig
+
+    #TODO: build implied dist using BL after making a vol surface fitter
+    @staticmethod
     def plot_implied_dist(chain, dte: int, rfr, symbol:str, mode="butterfly", gaussian_sigma=2, time_method='calendar', fig=None):
         '''
         chain needs to come in as a df with ba and strike, dte in days, rfr pre normalizing
@@ -240,7 +315,7 @@ class OptionMethods:
             if 'cmid' not in chain.columns or 'pmid' not in chain.columns:
                 chain['cmid'] = (chain['cbid'] + chain['cask']) / 2
                 chain['pmid'] = (chain['pbid'] + chain['pask']) / 2
-            T = TimeMethods.calculate_tte(dte, time_method=time_method)
+            T = TimeMethods.calculate_yte(dte, time_method=time_method)
             K = chain['strike'].values
             Cc = chain['cmid'].values
             Cp = chain['pmid'].values
@@ -349,6 +424,21 @@ class TimeMethods:
             return (end - start).days
 
     @staticmethod
+    def calendar_tte(start, end): #time to expiration in days which permits float as compared to calendar_dte
+        if not isinstance(start, pd.Timestamp):
+            start = pd.to_datetime(start)
+        if not isinstance(end, pd.Timestamp):
+            end = pd.to_datetime(end)
+        if (start.tz is None) != (end.tz is None):
+            raise ValueError(
+                "Both start and end must be either both naive or both timezone aware"
+            )
+        if start > end:
+            return None
+        else:
+            return (end - start).total_seconds() / 86400
+
+    @staticmethod
     def unix_to_time(t: int, granularity: str = 'd', scaled: bool = True):
         if scaled:
             dt = datetime.fromtimestamp(t / 1000)
@@ -364,7 +454,7 @@ class TimeMethods:
             raise ValueError(f'invalid granularity: {granularity}')
 
     @staticmethod
-    def calculate_tte(dte, time_method='calendar'):
+    def calculate_yte(dte, time_method='calendar'):
         if time_method == 'calendar':
             return dte / 365
         else:
@@ -381,3 +471,63 @@ class Auxiliary:
         except Exception as e:
             rfr = 4.2
         return rfr
+
+class YieldCurve:
+
+    def __init__(self):
+        year = (datetime.today() - timedelta(days=1)).year
+        response = requests.get(
+            f'https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/{year}/all?field_tdr_date_value={year}&type=daily_treasury_yield_curve&page&_format=csv').text.split(
+            "\n")
+        list_table = [[*row.split(",")] for row in response[1:]]
+        df = pd.DataFrame(list_table, columns=response[0].split(","))
+        df.columns = df.columns.str.strip('"')
+        df.set_index('Date', inplace=True)
+        df = df.apply(pd.to_numeric, errors='coerce')
+        df.index = pd.to_datetime(df.index).date
+        self.yieldcurvehistory = df
+        self.splinecache = {}
+
+    def get_rfr(self, maturity, targetdate=None):
+        '''
+        enter maturity in years
+        '''
+        if targetdate is None:
+            targetdate = datetime.today()
+        if not isinstance(targetdate, pd.Timestamp):
+            targetdate = pd.to_datetime(targetdate)
+        idx = np.abs(np.array([(d - targetdate.date()).days for d in self.yieldcurvehistory.index])).argmin()
+        curve_date = self.yieldcurvehistory.index[idx]
+        if curve_date in self.splinecache:
+            spline = self.splinecache[curve_date]
+            bey = float(spline(maturity))
+        else:
+            pairs = []
+            curve = self.yieldcurvehistory.iloc[idx]
+            for t, c in curve.items():
+                parts = t.split()
+                if len(parts) != 2:
+                    continue
+                num_str, unit = parts
+                try:
+                    num = float(num_str)
+                except ValueError:
+                    continue
+                unit = unit.lower()
+                if unit in ('mo', 'month', 'months', 'mth'): #idk why but the columns have different names like 1 Mo vs 1.5 Month
+                    y = num / 12
+                elif unit in ('yr', 'year', 'years'):
+                    y = num
+                else:
+                    continue
+                pairs.append((y, c))
+            times, curve = zip(*pairs)
+            spline = CubicSpline(times, curve, bc_type='natural')
+            self.splinecache[curve_date] = spline
+            if maturity <= times[0]:
+                bey = curve[0]
+            elif maturity >= times[-1]:
+                bey = curve[-1]
+            else:
+                bey = float(spline(maturity))
+        return np.log((1 + bey / 200) ** 2)

@@ -1,9 +1,14 @@
 # tastytrade-calculator
 A calculator and visualizer for option metrics using tastytrade's API. Requires a tastytrade account to use.
 
-This is the public version of a proprietary tool and will only be updated if new major features are added to the original.
+(Latest update: 2025-08-07, estimated next update: mid Sept 2025)
 
-(Latest update: 2025-07-13, estimated next update: end Jul 2025)
+## Changelog
+
+1. Added a calculator for the more important greeks (delta, gamma, vega, theta).
+2. Added the ATM term structure visualizer.
+3. A full yield curve can now be extracted using the Treasury website's data. However, using time-variable rates for rfr params is not yet supported.
+4. Minor changes to time methods.
 
 ## Setup
 
@@ -54,12 +59,11 @@ All plotting methods return a matplotlib figure object, which can be used to fur
 
 ## Planned features and known bugs
 
-1. (Prio: high) Next update will include a calculator for greeks.
-2. (Prio: high) Next update will include a term structure visualizer, which already exists in the private version but needs to be adapted.
-3. (Prio: high) Currently only a calendar time method is supported, which makes near-dated pricing inaccurate when non trading hours are considered. Future updates will extend this to trading time methods and possibly other vol-time estimators to allow for more robust calculations and support for 0dte.
-4. (Prio: medium) I'm planning to add Gatheral's SVI to at some point, after which a new mode will be added to the implied distribution plotter (currently 'breedenlitzenberger' is accepted as an input but returns nothing).
-5. (Prio: medium) The IV calculator will fail for highly illiquid options. See example.ipynb for such a case. Future updates will try to address this in one of two ways:
+1. (Prio: high) Currently only a calendar time method is supported, which makes near-dated pricing inaccurate when non trading hours are considered. Future updates will extend this to trading time methods and possibly other vol-time estimators to allow for more robust calculations and support for 0dte. UPDATE: this could either be an adjustable vol calendar or a method for "cleaning" calendar vols, or I might include both.
+2. NEW: (Prio: medium) In the future, the YieldCurve object will be a valid input for rfr params (which would allow for flexible rfr calculation across time).
+3. (Prio: medium) I'm planning to add Gatheral's SVI to at some point, after which a new mode will be added to the implied distribution plotter (currently 'breedenlitzenberger' is accepted as an input but returns nothing).
+4. (Prio: medium) The IV calculator will fail for highly illiquid options. See example.ipynb for such a case. Future updates will try to address this in one of two ways:
    - Cutting off calculations where BS returns invalid values
    - Interpolating illiquid IV values
-6. (Prio: low) The get_rfr method only supports getting the 13-week T-bill rate. In the far future this will be extended to a full yield curve, but for most cases this is really a big hassle for very little difference.
-7. (Prio: low) The ATM term structure visualizer will be extended with earnings vol visualizations to help with calculating vol attribution around earnings.
+5. (Prio: low) The ATM term structure visualizer will be extended with earnings vol visualizations to help with calculating vol attribution around earnings.
+6. NEW: (Prio: low) Historical Candle objects from tastytrade data may allow us to see the historical price evolution for existing options at a low frequency (daily) if the options have not yet expired. If this works, it would allow us to compare IV surfaces across time. Planned features under this: IV surface history, ATM vol history, vol move decomposition.
