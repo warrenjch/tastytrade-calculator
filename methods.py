@@ -17,22 +17,27 @@ import matplotlib.pyplot as plt
 class OptionMethods:
 
     @staticmethod
-    def batch_findoption(session, items, func, batch_size=90):
+    async def batch_findoption(session, items, func, batch_size=90):
         # generator of batches
-        batches = (
+        batches = [
             items[i: i + batch_size]
             for i in range(0, len(items), batch_size)
-        )
-        return list(chain.from_iterable(func(session, [option.symbol for option in batch]) for batch in batches))
+        ]
+        results = []
+        for batch in batches:
+            batch_symbols = [option.symbol for option in batch]
+            batch_result = await func(session, batch_symbols)
+            results.append(batch_result)
+        return list(chain.from_iterable(results))
 
     @staticmethod
-    def fetch_options(session, option_batch):
-        optiondata = get_market_data_by_type(session, options=option_batch)
+    async def fetch_options(session, option_batch):
+        optiondata = await get_market_data_by_type(session, options=option_batch)
         return optiondata
 
     @staticmethod
-    def convertchain(session, chain):
-        all_results = OptionMethods.batch_findoption(session, chain, OptionMethods.fetch_options, batch_size=90)
+    async def convertchain(session, chain):
+        all_results = await OptionMethods.batch_findoption(session, chain, OptionMethods.fetch_options, batch_size=90)
 
         res_map = {res.symbol: res for res in all_results}
 
@@ -92,19 +97,19 @@ class OptionMethods:
         return atmfs
 
     @staticmethod
-    def get_current_chain(session, symbol: str, exp: pd.Timestamp = None, dte: int = None):
+    async def get_current_chain(session, symbol: str, exp: pd.Timestamp = None, dte: int = None):
         if dte is None and exp is None:
             raise ValueError("Either dte or exp must be provided")
         elif dte is not None and exp is not None:
             raise ValueError("Only one of dte or exp should be provided")
         elif dte is not None and exp is None:
             exp = datetime.now() + pd.Timedelta(days=dte)
-        options = get_option_chain(session, symbol)
+        options = await get_option_chain(session, symbol)
         expiries = list(options.keys())
         if exp.date() not in expiries:
             raise ValueError(f"No options for {symbol} expiring on {exp.date()}, available expirations: {expiries}")
         chain = options[exp.date()]
-        chain = OptionMethods.convertchain(session, chain)
+        chain = await OptionMethods.convertchain(session, chain)
         return chain
 
     @staticmethod
@@ -214,10 +219,10 @@ class OptionMethods:
         return chain
 
     @staticmethod
-    def plot_iv(session, symbol: str, exp: pd.Timestamp, bounds=None, moneyness=False, time_method='calendar', gaussian_sigma=2, fig=None):
-        options = get_option_chain(session, symbol)
+    async def plot_iv(session, symbol: str, exp: pd.Timestamp, bounds=None, moneyness=False, time_method='calendar', gaussian_sigma=2, fig=None):
+        options = await get_option_chain(session, symbol)
         chain = options[exp.date()]
-        chain = OptionMethods.convertchain(session, chain)
+        chain = await OptionMethods.convertchain(session, chain)
         dte, rfr = TimeMethods.calendar_dte(datetime.now(), exp), Auxiliary.get_rfr()
         chain = OptionMethods.find_ivs(chain, dte, rfr, gaussian_sigma=gaussian_sigma, time_method=time_method)
         atmf = OptionMethods.find_atmf_strike(chain)
@@ -250,13 +255,13 @@ class OptionMethods:
         return fig
 
     @staticmethod
-    def atm_vol_surface(session, ticker: str, rfr, div_yield = 0, bounds: tuple = (1, 1e7), time_method: str = 'calendar', fig=None):
+    async def atm_vol_surface(session, ticker: str, rfr, div_yield = 0, bounds: tuple = (1, 1e7), time_method: str = 'calendar', fig=None):
         '''
         bounds will include dte of earliest exp and dte of furthest exp
         '''
         rfr /= 100
         lb, rb = bounds
-        options = get_option_chain(session, ticker)
+        options = await get_option_chain(session, ticker)
         today = datetime.today().date()
         expiries = [e for e in list(options.keys()) if ((TimeMethods.calendar_dte(today, e)>=lb) and (TimeMethods.calendar_dte(today, e)<=rb))]
         if not expiries:
@@ -264,7 +269,7 @@ class OptionMethods:
         records = []
         for exp in expiries:
             chain = options[exp]
-            df = OptionMethods.convertchain(session, chain)
+            df = await OptionMethods.convertchain(session, chain)
             date = pd.to_datetime(exp).date()
             if time_method == 'calendar':
                 dte = TimeMethods.calendar_dte(today, date)

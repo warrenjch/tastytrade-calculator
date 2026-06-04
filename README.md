@@ -27,7 +27,7 @@ async def setup():
     # alternatively, return session from this function
     config = Config(test=False)
     session = Session(config.username, config.password, is_test=config.test)
-    account = await Account.a_get(session, config.account_number)
+    account = await Account.get(session, config.account_number)
 
 asyncio.run(setup())
 print("Session and account setup complete.")
